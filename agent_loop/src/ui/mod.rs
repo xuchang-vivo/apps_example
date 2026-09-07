@@ -293,8 +293,10 @@ impl slint::platform::Platform for BluekernelBackend {
     fn run_event_loop(&self) -> Result<(), slint::PlatformError> {
         // Spec §9: if /dev/fb0 cannot be opened, exit the thread; the agent
         // loop keeps running headless.
+        println!("[ui] stage 5: opening /dev/fb0");
         let mut fb = fb_backend::FbFile::open()
             .map_err(|err| slint::PlatformError::Other(err.to_string()))?;
+        println!("[ui] stage 6: /dev/fb0 open, entering frame loop");
 
         loop {
             // Push the shared state into the window before advancing the
@@ -309,13 +311,12 @@ impl slint::platform::Platform for BluekernelBackend {
                 window.request_redraw();
                 let mut draw_result = Ok(());
                 window.draw_if_needed(|renderer| {
+                    println!("[ui] stage 7: first draw_if_needed entered");
                     // Render line-by-line to avoid a full-frame RGB565
                     // allocation (~300 KB); the trade-off is no Slint
                     // Path item support.
-                    renderer.render_by_line(fb_backend::FbLineBuffer::new(
-                        &mut fb,
-                        &mut draw_result,
-                    ));
+                    renderer
+                        .render_by_line(fb_backend::FbLineBuffer::new(&mut fb, &mut draw_result));
                 });
                 // Spec §9: a mid-frame write failure skips the damaged
                 // frame and retries on the next one.
@@ -332,14 +333,22 @@ impl slint::platform::Platform for BluekernelBackend {
 fn ui_thread_main(shared: Arc<Mutex<UiState>>) -> IoResult<()> {
     println!("[ui] starting agent_loop slint ui");
 
+    // Debug breadcrumbs: one print per startup stage, flushed so every line
+    // reaches the console before the next stage starts. The device currently
+    // freezes somewhere in here; the last printed stage localizes the fault.
     let refresher = Rc::new(RefCell::new(UiRefresher::new(shared)));
     let backend = BluekernelBackend::new(refresher.clone());
+    println!("[ui] stage 1: backend constructed");
 
     slint::platform::set_platform(Box::new(backend))
         .map_err(|err| Error::new(ErrorKind::Other, err.to_string()))?;
+    println!("[ui] stage 2: platform set");
 
     let ui = MainWindow::new().map_err(|err| Error::new(ErrorKind::Other, err.to_string()))?;
+    println!("[ui] stage 3: MainWindow constructed");
+
     refresher.borrow_mut().attach_ui(ui.as_weak());
+    println!("[ui] stage 4: refresher attached, entering event loop");
 
     slint::run_event_loop().map_err(|err| Error::new(ErrorKind::Other, err.to_string()))
 }

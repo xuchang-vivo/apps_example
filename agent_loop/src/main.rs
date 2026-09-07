@@ -76,6 +76,7 @@ fn main() -> std::io::Result<()> {
     if let Err(error) = ui::spawn_ui_thread(ui.clone()) {
         eprintln!("ui thread spawn failed: {error}");
     }
+    println!("[main] ui thread spawned, entering wifi connect");
     set_ui_state(&ui, ui::AgentState::Connecting, "connecting wifi");
     if let Err(error) = wifi::connect_wifi() {
         eprintln!("WiFi connection failed; agent server not started: {error}");

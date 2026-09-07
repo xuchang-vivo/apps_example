@@ -43,6 +43,7 @@ fn wlan0_name() -> [libc::c_char; 16] {
 }
 
 pub fn connect_wifi() -> std::io::Result<()> {
+    println!("[wifi] thread alive, sleeping 1s before scan");
     let _d = librs::time::msleep(1000);
 
     println!("Wifi example");
@@ -206,7 +207,8 @@ pub fn connect_wifi() -> std::io::Result<()> {
         println!();
     }
 
-    println!("Connecting to WiFi SSID: test_esp (WPA2)...");
+    let configured_ssid = core::str::from_utf8(WIFI_SSID).unwrap_or("<invalid-ssid>");
+    println!("Connecting to WiFi SSID: {} (WPA2)...", configured_ssid);
 
     // SIOCSIWENCODE — cache passphrase for WPA2 network
     let mut iwreq = libc::iwreq {

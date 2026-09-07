@@ -17,21 +17,44 @@ import("//build/templates/reload_autoconf_and_build.gni")
 import("//build/templates/rust.gni")
 import("//build/toolchain/blueos.gni")
 
+_agent_face_generated = "${target_gen_dir}/agent_face_window.rs"
+
+action("generate_agent_face") {
+  script = "//build/scripts/run_slint_cli.py"
+  inputs = [ "agent_face.slint" ]
+  outputs = [ _agent_face_generated ]
+  args = [
+    "--embed-resources",
+    "software-renderer",
+    "--output",
+    rebase_path(_agent_face_generated),
+    rebase_path(inputs[0]),
+  ]
+}
+
 reload_autoconf_and_build("agent_loop") {
   app_conf = [ "app.conf" ]
   crate_name = "agent_loop"
   crate_type = "bin"
 
   sources = [ "src/main.rs" ]
-  inputs = [ "capabilities.json" ]
+  inputs = [
+    "capabilities.json",
+    _agent_face_generated,
+  ]
+  rustenv = [ "SLINT_UI_GENERATED=" + rebase_path(_agent_face_generated) ]
   deps = [
+    ":generate_agent_face",
     "//external/vendor/embedded-io-0.6.1:embedded_io",
+    "//external/vendor/embedded-websocket-0.9.5:embedded_websocket",
     "//external/vendor/embedded-tls-0.16.3:embedded_tls",
     "//external/vendor/fastrand-2.3.0:fastrand",
     "//external/vendor/httparse-1.10.1:httparse",
+    "//external/vendor/libm-0.2.16:libm",
     "//external/vendor/rand_core-0.6.4:rand_core",
     "//external/vendor/serde-1.0.228:serde",
     "//external/vendor/serde_json-1.0.135:serde_json",
+    "//external/vendor/slint-1.17.1:slint",
     "//kernel/adapter/esp_radio_sys",
     "//kernel/kconfig:blueos_kconfig",
     "//kernel/rsrt:rsrt_std",

@@ -12,14 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod led;
+pub mod bme280;
+pub mod led;
+pub mod led_matrix;
 
 use std::error::Error;
 
+use crate::caps::bme280::{Bme280Caps, Bme280ReadArgs};
 use crate::caps::led::LedCaps;
 use crate::caps::led::LedProgramArgs;
+use crate::caps::led_matrix::{LedMatrixCaps, LedMatrixDrawArgs};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const CAPABILITIES_JSON_LEN: usize = include_bytes!("../../capabilities.json").len();
 
@@ -44,12 +48,16 @@ pub struct CapabilityDefinition {
 #[derive(Clone, Copy)]
 pub enum CapabilityHandler {
     LedProgram,
+    LedMatrixDraw,
+    Bme280Read,
 }
 
 impl CapabilityHandler {
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
             "led_program" => Some(Self::LedProgram),
+            "led_matrix_draw" => Some(Self::LedMatrixDraw),
+            "sensor_read" => Some(Self::Bme280Read),
             _ => None,
         }
     }
@@ -113,6 +121,24 @@ impl CapabilityRegistry {
                         repeat: Some(1),
                     }
                 }))
+            }
+            CapabilityHandler::LedMatrixDraw => {
+                match serde_json::from_str::<LedMatrixDrawArgs>(arguments) {
+                    Ok(args) => LedMatrixCaps::draw(args),
+                    Err(error) => error_result(
+                        "invalid_args",
+                        format!("led_matrix_draw arguments are invalid: {error}"),
+                    ),
+                }
+            }
+            CapabilityHandler::Bme280Read => {
+                match serde_json::from_str::<Bme280ReadArgs>(arguments) {
+                    Ok(args) => Bme280Caps::read(args),
+                    Err(error) => error_result(
+                        "invalid_args",
+                        format!("sensor_read arguments are invalid: {error}"),
+                    ),
+                }
             }
         }
     }

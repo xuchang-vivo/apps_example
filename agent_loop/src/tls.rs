@@ -19,9 +19,14 @@ use embedded_io::{Error as _, ErrorKind, ErrorType, Read, Write};
 use embedded_tls::blocking::*;
 use rand_core::{CryptoRng, RngCore};
 use std::net::TcpStream;
+use std::time::Duration;
 
 const TLS_READ_RECORD_BUF_SIZE: usize = 16640;
 const TLS_WRITE_RECORD_BUF_SIZE: usize = 4096;
+// Bound every blocking socket operation. Without this, a connected peer that
+// stops producing an HTTP response can hold the single WS handler forever.
+const API_READ_TIMEOUT: Duration = Duration::from_secs(30);
+const API_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Unified I/O error for the agent transport.
 ///
@@ -225,10 +230,23 @@ pub struct EmbeddedTlsTransport {
 
 impl EmbeddedTlsTransport {
     pub fn new() -> Self {
+        let mut timestamp = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        let _ = unsafe { librs::time::clock_gettime(1, &mut timestamp as *mut libc::timespec) };
+        let stack_entropy = (&timestamp as *const libc::timespec as usize) as u64;
+        let seed = (timestamp.tv_sec as u64)
+            .wrapping_mul(1_000_000_007)
+            .wrapping_add(timestamp.tv_nsec as u64)
+            .wrapping_add(stack_entropy);
         Self {
             read_buf: vec![0u8; TLS_READ_RECORD_BUF_SIZE],
             write_buf: vec![0u8; TLS_WRITE_RECORD_BUF_SIZE],
-            rng: SimpleRng(fastrand::Rng::with_seed(0xDEAD_BEEF_CAFE_BABE)),
+            // Avoid a process-wide deterministic TLS nonce sequence. The
+            // timestamp/stack-derived seed is only a fallback; a hardware
+            // CSPRNG should be wired in for production TLS.
+            rng: SimpleRng(fastrand::Rng::with_seed(seed)),
             sni: None,
         }
     }
@@ -256,9 +274,24 @@ impl crate::http::SocketTransport for EmbeddedTlsTransport {
         scheme: crate::http::Scheme,
     ) -> Result<Self::Socket<'a>, Self::Error> {
         println!("[http] connecting to {}:{}...", host, port);
-        // let stream = TcpStream::connect(("124.72.129.70", port))?;
         let stream = TcpStream::connect((host, port))?;
-        stream.set_nodelay(true)?;
+        // BlueOS does not currently implement IPPROTO_TCP/TCP_NODELAY. It is
+        // only a latency hint, so keep the connection usable when unsupported.
+        if let Err(error) = stream.set_nodelay(true) {
+            println!("[http] TCP_NODELAY unavailable: {error}");
+        }
+        stream
+            .set_read_timeout(Some(API_READ_TIMEOUT))
+            .map_err(|error| {
+                println!("[http] read timeout setup failed: {error}");
+                error
+            })?;
+        stream
+            .set_write_timeout(Some(API_WRITE_TIMEOUT))
+            .map_err(|error| {
+                println!("[http] write timeout setup failed: {error}");
+                error
+            })?;
         println!("[http] TCP connected");
 
         match scheme {

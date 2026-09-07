@@ -13,13 +13,19 @@
 // limitations under the License.
 
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs::{File, OpenOptions};
 use std::io::Write as _;
 
 use crate::caps::error_result;
 
 const DEFAULT_MORSE_UNIT_MS: u64 = 200;
+const MAX_REPEAT: u32 = 16;
+const MAX_STEP_COUNT: usize = 32;
+const MAX_HOLD_MS: u64 = 10_000;
+const MAX_MORSE_TEXT_LEN: usize = 64;
+const MAX_MORSE_UNIT_MS: u64 = 1_000;
+const MAX_PROGRAM_DURATION_MS: u64 = 30_000;
 
 /// Character-device paths exposed by `boards/seeed_xiao_esp32c3::init_gpio`.
 const LED_BLUE_DEVICE: &str = "/dev/led_b";
@@ -80,22 +86,52 @@ impl LedChannels {
         self.blue.is_some() || self.red.is_some()
     }
 
-    fn write_blue(&mut self, on: bool) {
+    fn write_blue(&mut self, on: bool) -> Result<(), String> {
         if let Some(file) = self.blue.as_mut() {
-            let _ = file.write_all(if on { LED_ON } else { LED_OFF });
+            file.write_all(if on { LED_ON } else { LED_OFF })
+                .map_err(|error| format!("write blue LED failed: {error}"))?;
         }
+        Ok(())
     }
 
-    fn write_red(&mut self, on: bool) {
+    fn write_red(&mut self, on: bool) -> Result<(), String> {
         if let Some(file) = self.red.as_mut() {
-            let _ = file.write_all(if on { LED_ON } else { LED_OFF });
+            file.write_all(if on { LED_ON } else { LED_OFF })
+                .map_err(|error| format!("write red LED failed: {error}"))?;
         }
+        Ok(())
     }
 
-    fn off(&mut self) {
-        self.write_blue(false);
-        self.write_red(false);
+    fn off(&mut self) -> Result<(), String> {
+        self.write_blue(false)?;
+        self.write_red(false)?;
+        Ok(())
     }
+}
+
+/// Drive both LED channels off by opening the character devices transiently.
+///
+/// The handles close when this function returns, so later `led_program`
+/// capability invocations can reopen the devices without contention. Used at
+/// boot to establish a known off state before WiFi and the agent runtime come
+/// up, so the LED does not stay lit while the network stack initialises.
+pub fn turn_off() -> Result<(), String> {
+    let mut channels = LedChannels::open();
+    channels.off()
+}
+
+/// Light one channel as a steady readiness signal.
+///
+/// Like [`turn_off`], the device handles are released on return so capability
+/// invocations keep working. `color` must be `"red"` or `"blue"`; the other
+/// channel is driven off so the signal is unambiguous. Used to indicate that
+/// the WebSocket server is up and accepting connections.
+pub fn turn_on(color: &str) -> Result<(), String> {
+    let mut channels = LedChannels::open();
+    let (red, blue) = color_channels(Some(color))?;
+    channels.write_red(red)?;
+    channels.write_blue(blue)?;
+    Ok(())
 }
 
 pub struct LedCaps {
@@ -108,7 +144,7 @@ impl LedCaps {
     pub fn new() -> Self {
         let mut channels = LedChannels::open();
         // Establish a known starting state regardless of boot polarity.
-        channels.off();
+        let _ = channels.off();
         Self {
             is_on: false,
             color: None,
@@ -117,7 +153,7 @@ impl LedCaps {
     }
 
     pub fn run_program(&mut self, args: LedProgramArgs) -> Value {
-        match args {
+        let result = match args {
             LedProgramArgs::Steps { steps, repeat } => self.run_steps(steps, repeat.unwrap_or(1)),
             LedProgramArgs::Morse {
                 text,
@@ -128,15 +164,58 @@ impl LedCaps {
                 unit_ms.unwrap_or(DEFAULT_MORSE_UNIT_MS),
                 repeat.unwrap_or(1),
             ),
+        };
+        if result.get("ok") != Some(&Value::Bool(true)) {
+            let _ = self.apply(false, None);
         }
+        result
     }
 
     fn run_steps(&mut self, steps: Vec<LedStep>, repeat: u32) -> Value {
         if steps.is_empty() {
             return error_result("invalid_args", String::from("steps cannot be empty"));
         }
-        if repeat == 0 {
+        if steps.len() > MAX_STEP_COUNT {
+            return error_result(
+                "invalid_args",
+                format!("steps cannot exceed {MAX_STEP_COUNT}"),
+            );
+        }
+        if repeat == 0 || repeat > MAX_REPEAT {
             return error_result("invalid_args", String::from("repeat must be >= 1"));
+        }
+
+        let mut duration = 0u64;
+        for step in &steps {
+            if let Err(error) = parse_led_state(&step.state) {
+                return error_result("invalid_args", error);
+            }
+            if let Some(hold_ms) = step.hold_ms {
+                if hold_ms > MAX_HOLD_MS {
+                    return error_result(
+                        "invalid_args",
+                        format!("hold_ms cannot exceed {MAX_HOLD_MS}"),
+                    );
+                }
+                duration = match duration.checked_add(hold_ms) {
+                    Some(value) => value,
+                    None => {
+                        return error_result(
+                            "invalid_args",
+                            String::from("program duration overflow"),
+                        );
+                    }
+                };
+            }
+        }
+        let total_duration = duration.checked_mul(repeat as u64);
+        if total_duration != Some(duration.saturating_mul(repeat as u64))
+            || total_duration.unwrap_or(u64::MAX) > MAX_PROGRAM_DURATION_MS
+        {
+            return error_result(
+                "invalid_args",
+                format!("program duration cannot exceed {MAX_PROGRAM_DURATION_MS} ms"),
+            );
         }
 
         for round in 0..repeat {
@@ -182,14 +261,30 @@ impl LedCaps {
     }
 
     fn blink_morse(&mut self, text: &str, unit_ms: u64, repeat: u32) -> Value {
-        if unit_ms == 0 {
+        if text.is_empty() || text.len() > MAX_MORSE_TEXT_LEN {
+            return error_result(
+                "invalid_args",
+                format!("text must be 1..={MAX_MORSE_TEXT_LEN} bytes"),
+            );
+        }
+        if unit_ms == 0 || unit_ms > MAX_MORSE_UNIT_MS {
             return error_result("invalid_args", String::from("unit_ms must be >= 1"));
         }
-        if repeat == 0 {
+        if repeat == 0 || repeat > MAX_REPEAT {
             return error_result("invalid_args", String::from("repeat must be >= 1"));
         }
         let uppercase = text.to_ascii_uppercase();
         let chars: Vec<char> = uppercase.chars().collect();
+        let estimated_duration = (chars.len() as u64)
+            .checked_mul(unit_ms)
+            .and_then(|value| value.checked_mul(20))
+            .and_then(|value| value.checked_mul(repeat as u64));
+        if estimated_duration.unwrap_or(u64::MAX) > MAX_PROGRAM_DURATION_MS {
+            return error_result(
+                "invalid_args",
+                format!("program duration cannot exceed {MAX_PROGRAM_DURATION_MS} ms"),
+            );
+        }
 
         for round in 0..repeat {
             println!(
@@ -202,7 +297,9 @@ impl LedCaps {
             for (char_index, ch) in chars.iter().enumerate() {
                 if *ch == ' ' {
                     println!("led> morse char={} value=<space>", char_index + 1);
-                    self.apply(false, None).ok();
+                    if let Err(error) = self.apply(false, None) {
+                        return error_result("io_error", error);
+                    }
                     sleep_ms(unit_ms * 7);
                     continue;
                 }
@@ -222,14 +319,17 @@ impl LedCaps {
                 );
 
                 for (symbol_index, symbol) in code.chars().enumerate() {
-                    // Morse symbols are rendered in white (both LEDs on).
-                    if let Err(error) = self.apply(true, Some("white")) {
+                    // Morse symbols use the red channel by default. The board
+                    // exposes only independent red and blue LEDs.
+                    if let Err(error) = self.apply(true, Some("red")) {
                         return error_result("unsupported_color", error);
                     }
                     let hold = if symbol == '-' { unit_ms * 3 } else { unit_ms };
                     sleep_ms(hold);
 
-                    self.apply(false, None).ok();
+                    if let Err(error) = self.apply(false, None) {
+                        return error_result("io_error", error);
+                    }
                     if symbol_index + 1 < code.len() {
                         sleep_ms(unit_ms);
                     }
@@ -259,10 +359,10 @@ impl LedCaps {
     fn apply(&mut self, on: bool, color: Option<&str>) -> Result<(), String> {
         if on {
             let (red, blue) = color_channels(color)?;
-            self.channels.write_red(red);
-            self.channels.write_blue(blue);
+            self.channels.write_red(red)?;
+            self.channels.write_blue(blue)?;
         } else {
-            self.channels.off();
+            self.channels.off()?;
         }
         self.is_on = on;
         self.color = color.map(|c| c.to_ascii_lowercase());
@@ -286,13 +386,9 @@ fn parse_led_state(state: &str) -> Result<bool, String> {
 /// the wrong color.
 fn color_channels(color: Option<&str>) -> Result<(bool, bool), String> {
     match color.map(|c| c.to_ascii_lowercase()).as_deref() {
-        None | Some("white") => Ok((true, true)),
-        Some("red") => Ok((true, false)),
+        None | Some("red") => Ok((true, false)),
         Some("blue") => Ok((false, true)),
-        Some("purple" | "magenta" | "violet" | "pink") => Ok((true, true)),
-        Some(other) => Err(format!(
-            "unsupported color '{other}'; supported: red, blue, white, purple, magenta, violet, pink"
-        )),
+        Some(other) => Err(format!("unsupported color '{other}'; supported: red, blue")),
     }
 }
 

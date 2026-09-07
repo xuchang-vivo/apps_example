@@ -18,6 +18,7 @@
 //! read/write/ioctl — no mmap.
 
 use librs::c_str::CStr;
+use librs::syscall::Syscall;
 use slint::platform::software_renderer::{LineBufferProvider, Rgb565Pixel};
 use std::io::{Error, ErrorKind, Result as IoResult};
 

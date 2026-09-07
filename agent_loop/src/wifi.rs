@@ -43,7 +43,6 @@ fn wlan0_name() -> [libc::c_char; 16] {
 }
 
 pub fn connect_wifi() -> std::io::Result<()> {
-    println!("[wifi] thread alive, sleeping 1s before scan");
     let _d = librs::time::msleep(1000);
 
     println!("Wifi example");

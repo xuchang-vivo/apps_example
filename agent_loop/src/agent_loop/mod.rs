@@ -81,6 +81,7 @@ pub enum AgentLoopError {
     IoError,
     Api(crate::error::Error<AgentError>),
     InvalidResponse,
+    ContextLimit { actual: usize, limit: usize },
     ModelCallLimit,
 }
 
@@ -90,6 +91,9 @@ impl fmt::Display for AgentLoopError {
             Self::IoError => f.write_str("agent I/O error"),
             Self::Api(error) => write!(f, "{error}"),
             Self::InvalidResponse => f.write_str("model returned an invalid response"),
+            Self::ContextLimit { actual, limit } => {
+                write!(f, "agent context exceeded {limit} bytes (estimated {actual} bytes)")
+            }
             Self::ModelCallLimit => f.write_str("model exceeded the device call limit"),
         }
     }
@@ -161,9 +165,16 @@ impl AgentSession {
                 self.ui_set(AgentState::Error, "turn timeout");
                 return Err(AgentLoopError::IoError);
             }
-            if message_context_bytes(&messages, registry) > MAX_TURN_CONTEXT_BYTES {
+            let context_bytes = message_context_bytes(&messages, registry);
+            println!(
+                "[agent] round {round} context_bytes={context_bytes} limit={MAX_TURN_CONTEXT_BYTES}"
+            );
+            if context_bytes > MAX_TURN_CONTEXT_BYTES {
                 self.ui_set(AgentState::Error, "context limit");
-                return Err(AgentLoopError::InvalidResponse);
+                return Err(AgentLoopError::ContextLimit {
+                    actual: context_bytes,
+                    limit: MAX_TURN_CONTEXT_BYTES,
+                });
             }
             let mut request = ChatCompletionRequest::new(model, messages.as_slice());
             request.max_completion_tokens = Some(MAX_COMPLETION_TOKENS);
@@ -221,7 +232,6 @@ impl AgentSession {
                     }
 
                     let mut assistant_message = ChatMessage::assistant("");
-                    assistant_message.content = message.content.map(Into::into);
                     let tool_call_count = tool_calls.len();
                     assistant_message.tool_calls = Some(tool_calls);
                     let assistant_message_index = messages.len();

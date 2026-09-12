@@ -12,30 +12,74 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Cartoon agent face for the agent_loop app (320x480 ST7796 LCD).
+// Xiaozhi-style face (glowing eyes + mouth) + task dialog for the
+// agent_loop app (240x320 portrait ST7796 panel).
 //
-// render_by_line constraints honored here:
-//   - No Path items (the software renderer skips them silently).
-//   - No rotation. Every round shape is a Rectangle with border-radius.
-//   - Text is fine: `slint-cli --embed-resources software-renderer` embeds a
-//     DejaVu Sans bitmap font into the generated Rust code.
+// The face is two glowing eyes plus a state-shaped mouth on a black
+// background, in the style of the xiaozhi-esp32 AI companion: emotion
+// and agent state are carried by eye and mouth shape, size, color and
+// motion. Eyes are sharp rounded triangles — wide base at the bottom
+// tapering to a small rounded tip at the top (never balls, ovals or
+// plain rects), centers (94,114) and (146,114). Blinks squash the wedge
+// stack like a closing eyelid. The mouth (center x 120, below the eyes)
+// is one static border-radius shape per state — flat line, "o", open
+// mouth, smile ring or frown ring — plus soft pink cheek pads on the
+// warm states.
+//   0 Idle        droopy cyan wedges + flat small mouth + "Zzz" top-right
+//   1 Connecting  small green wedges + small "o" mouth
+//   2 Thinking    yellow wedges + skewed open mouth + pulsing "!"
+//   3 Streaming   green wedges + wide open mouth ("talking")
+//   4 Reasoning   narrowed yellow slits + flat straight mouth
+//   5 ToolRunning blue wedge + wink line + hammer top-right
+//   6 Suspended   closed line eyes + tiny sleep mouth (sleeping)
+//   7 Done        happy "^^" arcs + big smile ring + cheeks
+//   8 Error       sad "vv" arcs + frown ring in red
+// The glow is faked with layered translucent halo rectangles (no
+// gradients). All shapes are plain Rectangles/Texts, so the on-device
+// software-renderer constraints hold:
+//   - No Path items (render_by_line skips them silently).
+//   - No rotation and no gradients; round shapes are border-radius
+//     rectangles, arcs are half-covered rings, glow is layered rects.
+//   - Flat element tree: opacity only on leaves (no parent-opacity
+//     grouping, which render_by_line cannot composite).
+//   - ASCII-only labels (the embedded DejaVu bitmap font has no CJK).
+//   - RENDER BUDGET (this one bit us): only small marks (dots, the
+//     "!" dot of the pair, the hammer, Zzz) may ride the infinite
+//     `pulse`/z-lift clocks. Large surfaces — halos, the eye wedges,
+//     the mouth — must stay static: every property bound to a running
+//     clock dirties its whole bounding box each 80 ms frame, the
+//     single-core CPU then spends the frame rasterizing + writing
+//     the SPI bus, and the main task's websocket accept loop is
+//     starved (bind + LED stay up, handshakes never complete).
+//     The 44x44 hammer circle and the "!" bar height are static for
+//     exactly this reason; only their opacity breathes.
 //
-// The Rust side pushes `state` (0-8) plus preformatted strings, and drives
-// `spin-x`/`spin-y`/`blink` per frame. `pulse`, `z-lift-a/b` and
-// `intro-progress` are self-running animations (single init trigger,
-// infinite iteration).
+// Page layout (top to bottom):
+//   y   0-28   header: title + live state dot
+//   y  29-199  face: two glowing triangle eyes + mouth on black
+//              (+ Zzz / ! / hammer marks)
+//   y 200-292  task dialog card: state badge, round progress bar,
+//              STATUS/ROUND/TIME rows
+//   y 296-318  bottom status strip
+//
+// The Rust side pushes `state` (0-8) plus preformatted strings, and
+// drives `blink` per frame (spin-x/spin-y are still pushed but unused:
+// at ~12 fps the wander read as jitter, so the eyes stay pinned at
+// their centers). `pulse`, `z-lift-a/b/c` and `intro-progress` are
+// self-running animations.
 
 export component MainWindow inherits Window {
-    width: 320px;
-    height: 480px;
-    background: #0b0f12;
-    default-font-size: 10px;
+    width: 240px;
+    height: 320px;
+    background: #000000;
+    default-font-size: 9px;
 
     // Agent-side inputs.
     in property <int> state;         // 0-8, see ui::AgentState
     in property <string> status;     // e.g. "thinking", "tool: led_matrix_draw"
     in property <string> round-text; // e.g. "R2/4"
     in property <string> turn-text;  // e.g. "t1200ms"
+    in property <float> round-frac;  // round / MAX_TOOL_ROUNDS, 0.0..1.0
     // Per-frame animation drivers from the UI thread.
     in property <float> spin-x;
     in property <float> spin-y;
@@ -46,11 +90,13 @@ export component MainWindow inherits Window {
     property <float> pulse: 0.2;
     property <float> z-lift-a: 0;
     property <float> z-lift-b: 0;
+    property <float> z-lift-c: 0;
     init => {
         intro-progress = 1;
         pulse = 1;
         z-lift-a = 1;
         z-lift-b = 1;
+        z-lift-c = 1;
     }
     animate intro-progress {
         duration: 450ms;
@@ -64,16 +110,22 @@ export component MainWindow inherits Window {
     }
     animate z-lift-a {
         duration: 2200ms;
-        easing: linear;
+        easing: ease-in;
         iteration-count: -1;
     }
     animate z-lift-b {
         duration: 3100ms;
-        easing: linear;
+        easing: ease-in;
+        iteration-count: -1;
+    }
+    animate z-lift-c {
+        duration: 2600ms;
+        easing: ease-in;
         iteration-count: -1;
     }
 
     // State predicates.
+    property <bool> is-idle: state == 0;
     property <bool> is-connecting: state == 1;
     property <bool> is-thinking: state == 2;
     property <bool> is-streaming: state == 3;
@@ -83,308 +135,468 @@ export component MainWindow inherits Window {
     property <bool> is-done: state == 7;
     property <bool> is-error: state == 8;
 
-    // Eye geometry. Base eye: 34x44, vertical center fixed at y=192.
-    property <float> left-eye-factor:
-        is-thinking ? 0.45 :
-        is-streaming ? 1.1 :
-        is-reasoning ? 0.3 :
-        is-yielding ? 0.14 :
-        is-done ? 0.55 :
-        is-tool ? 0.95 :
-        is-connecting ? 0.9 : 1.0;
-    property <float> right-eye-factor: is-tool ? 0.15 : left-eye-factor;
-    property <length> eye-look-up: is-connecting ? 10px : 0px;
+    // ===== Face sprite (80x80px centered at 120, 100) =====
+    // Rich emoji-style complete face with eyes, mouth, glow, and expression
+    // No individual eye/mouth geometry - one sprite per state
 
-    // Mouth geometry.
-    property <length> mouth-w:
-        is-streaming ? 26px :
-        is-done ? 96px :
-        is-reasoning ? 72px :
-        is-tool ? 60px :
-        is-thinking ? 48px :
-        is-error ? 60px :
-        is-yielding ? 32px :
-        is-connecting ? 40px : 56px;
-    property <length> mouth-h:
-        is-streaming ? 26px :
-        is-done ? 30px :
-        is-reasoning ? 20px :
-        is-tool ? 16px :
-        is-thinking ? 8px :
-        is-error ? 8px :
-        is-yielding ? 6px :
-        is-connecting ? 6px : 8px;
-    property <length> mouth-radius:
-        is-streaming ? 13px :
-        is-done ? 15px :
-        is-reasoning ? 10px :
-        is-tool ? 8px : 4px;
-
-    // Accessory opacity helpers.
-    property <float> radio-opacity: is-connecting ? 0.55 + 0.45 * pulse : 0;
-    property <float> gear-opacity: is-tool ? 0.4 + 0.6 * pulse : 0;
-    property <float> bulb-opacity: is-reasoning ? 0.5 + 0.5 * pulse : 0;
-
-    // ===== Face (declared first: the spinner orbits behind the head) =====
-
-    // Thinking spinner dot: position pushed per frame from Rust (sin/cos).
-    Rectangle {
-        x: 160px + 110px * spin-x - 8px;
-        y: 205px + 95px * spin-y - 8px;
-        width: 16px;
-        height: 16px;
-        border-radius: 8px;
-        background: #f4d35e;
-        opacity: is-thinking ? 0.9 : 0;
-    }
-
-    // Head.
-    Rectangle {
-        x: 60px;
-        y: 120px;
-        width: 200px;
-        height: 170px;
-        border-radius: 85px;
-        background: #ffd166;
-        opacity: 0.3 + 0.7 * intro-progress;
-    }
-
-    // Left eye.
-    Rectangle {
-        x: 104px;
-        y: 192px - self.height / 2 - eye-look-up;
-        width: 34px;
-        height: 44px * left-eye-factor * blink;
-        border-radius: 17px;
-        background: #12333b;
-        opacity: is-error ? 0 : 1;
-    }
-
-    // Right eye (winks during ToolRunning).
-    Rectangle {
-        x: 182px;
-        y: 192px - self.height / 2 - eye-look-up;
-        width: 34px;
-        height: 44px * right-eye-factor * blink;
-        border-radius: 17px;
-        background: #12333b;
-        opacity: is-error ? 0 : 1;
-    }
-
-    // X eyes for the Error state (Text "X" — no rotation needed).
-    Text {
-        x: 100px;
-        y: 170px;
-        width: 42px;
-        height: 42px;
-        text: "X";
-        font-size: 28px;
-        color: #ef476f;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-        opacity: is-error ? 1 : 0;
-    }
-    Text {
-        x: 178px;
-        y: 170px;
-        width: 42px;
-        height: 42px;
-        text: "X";
-        font-size: 28px;
-        color: #ef476f;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-        opacity: is-error ? 1 : 0;
-    }
-
-    // Mouth.
-    Rectangle {
-        x: 160px - mouth-w / 2;
-        y: is-error ? 246px : 252px;
-        width: mouth-w;
-        height: mouth-h;
-        border-radius: mouth-radius;
-        background: is-error ? #ef476f : #12333b;
-    }
-
-    // Cheek blushes for the Done state.
-    Rectangle {
-        x: 88px;
-        y: 236px;
-        width: 18px;
-        height: 10px;
-        border-radius: 5px;
-        background: #ef8354;
-        opacity: is-done ? 0.8 : 0;
-    }
-    Rectangle {
-        x: 214px;
-        y: 236px;
-        width: 18px;
-        height: 10px;
-        border-radius: 5px;
-        background: #ef8354;
-        opacity: is-done ? 0.8 : 0;
-    }
-
-    // ===== Accessories above the head =====
-
-    // Connecting: radio-wave bars, breathing opacity.
-    Rectangle {
-        x: 151px;
-        y: 88px;
-        width: 18px;
-        height: 8px;
-        border-radius: 4px;
-        background: #06d6a0;
-        opacity: radio-opacity;
-    }
-    Rectangle {
-        x: 144px;
-        y: 74px;
-        width: 32px;
-        height: 8px;
-        border-radius: 4px;
-        background: #06d6a0;
-        opacity: 0.7 * radio-opacity;
-    }
-    Rectangle {
-        x: 137px;
+    // Idle face
+    Image {
+        x: 80px;
         y: 60px;
-        width: 46px;
-        height: 8px;
-        border-radius: 4px;
-        background: #06d6a0;
-        opacity: 0.45 * radio-opacity;
+        width: 80px;
+        height: 80px;
+        source: @image-url("face_idle.png");
+        opacity: is-idle ? 1 : 0;
+    }
+    // Connecting face
+    Image {
+        x: 80px;
+        y: 60px;
+        width: 80px;
+        height: 80px;
+        source: @image-url("face_connecting.png");
+        opacity: is-connecting ? 1 : 0;
+    }
+    // Thinking face
+    Image {
+        x: 80px;
+        y: 60px;
+        width: 80px;
+        height: 80px;
+        source: @image-url("face_thinking.png");
+        opacity: is-thinking ? 1 : 0;
+    }
+    // Streaming face
+    Image {
+        x: 80px;
+        y: 60px;
+        width: 80px;
+        height: 80px;
+        source: @image-url("face_streaming.png");
+        opacity: is-streaming ? 1 : 0;
+    }
+    // Reasoning face
+    Image {
+        x: 80px;
+        y: 60px;
+        width: 80px;
+        height: 80px;
+        source: @image-url("face_reasoning.png");
+        opacity: is-reasoning ? 1 : 0;
+    }
+    // Tool running face
+    Image {
+        x: 80px;
+        y: 60px;
+        width: 80px;
+        height: 80px;
+        source: @image-url("face_tool.png");
+        opacity: is-tool ? 1 : 0;
+    }
+    // Yielding/Suspended face
+    Image {
+        x: 80px;
+        y: 60px;
+        width: 80px;
+        height: 80px;
+        source: @image-url("face_yielding.png");
+        opacity: is-yielding ? 1 : 0;
+    }
+    // Done face
+    Image {
+        x: 80px;
+        y: 60px;
+        width: 80px;
+        height: 80px;
+        source: @image-url("face_done.png");
+        opacity: is-done ? 1 : 0;
+    }
+    // Error face
+    Image {
+        x: 80px;
+        y: 60px;
+        width: 80px;
+        height: 80px;
+        source: @image-url("face_error.png");
+        opacity: is-error ? 1 : 0;
     }
 
-    // ToolRunning: gear (ring + hub + 4 teeth), pulsing.
-    Rectangle {
-        x: 142px;
-        y: 84px;
-        width: 36px;
-        height: 36px;
-        border-radius: 18px;
-        background: transparent;
-        border-color: #4cc9f0;
-        border-width: 5px;
-        opacity: gear-opacity;
-    }
-    Rectangle {
-        x: 155px;
-        y: 97px;
-        width: 10px;
-        height: 10px;
-        border-radius: 5px;
-        background: #4cc9f0;
-        opacity: gear-opacity;
-    }
-    Rectangle {
-        x: 156px;
-        y: 76px;
-        width: 8px;
-        height: 8px;
-        border-radius: 2px;
-        background: #4cc9f0;
-        opacity: gear-opacity;
-    }
-    Rectangle {
-        x: 156px;
-        y: 120px;
-        width: 8px;
-        height: 8px;
-        border-radius: 2px;
-        background: #4cc9f0;
-        opacity: gear-opacity;
-    }
-    Rectangle {
-        x: 134px;
-        y: 98px;
-        width: 8px;
-        height: 8px;
-        border-radius: 2px;
-        background: #4cc9f0;
-        opacity: gear-opacity;
-    }
-    Rectangle {
-        x: 180px;
-        y: 98px;
-        width: 8px;
-        height: 8px;
-        border-radius: 2px;
-        background: #4cc9f0;
-        opacity: gear-opacity;
-    }
+    // Dialog: state badge label + accent color. The eyes, header dot and
+    // badge all use this color, so the whole page follows the state.
+    property <string> dialog-title:
+        is-connecting ? "CONNECTING" :
+        is-thinking ? "THINKING" :
+        is-streaming ? "STREAMING" :
+        is-reasoning ? "REASONING" :
+        is-tool ? "TOOL RUNNING" :
+        is-yielding ? "SUSPENDED" :
+        is-done ? "TASK DONE" :
+        is-error ? "ERROR" : "IDLE";
+    property <color> dialog-accent:
+        is-connecting ? #06d6a0 :
+        is-thinking ? #f4d35e :
+        is-streaming ? #06d6a0 :
+        is-reasoning ? #f4d35e :
+        is-tool ? #4cc9f0 :
+        is-yielding ? #9bf6ff :
+        is-done ? #06d6a0 :
+        is-error ? #ef476f : #9bf6ff;
+    property <bool> dialog-busy:
+        is-connecting || is-thinking || is-streaming || is-reasoning
+        || is-tool || is-yielding;
 
-    // Reasoning: idea bulb, popping.
+    // ===== Header band (y 0-28) =====
     Rectangle {
-        x: 160px - self.width / 2;
-        y: 78px;
-        width: 20px + 12px * pulse;
-        height: 20px + 12px * pulse;
-        border-radius: self.width / 2;
-        background: #f4d35e;
-        opacity: bulb-opacity;
+        y: 0;
+        width: 240px;
+        height: 28px;
+        background: #10161b;
     }
     Rectangle {
-        // bulb stem
-        x: 156px;
-        y: 100px;
-        width: 8px;
-        height: 10px;
-        border-radius: 2px;
-        background: #f4d35e;
-        opacity: bulb-opacity;
-    }
-
-    // YieldingWifi: floating "z" letters.
-    Text {
-        x: 196px;
-        y: 110px - 70px * z-lift-a;
-        text: "z";
-        font-size: 18px;
-        color: #9bf6ff;
-        opacity: is-yielding ? 1 - z-lift-a : 0;
-    }
-    Text {
-        x: 218px;
-        y: 132px - 55px * z-lift-b;
-        text: "z";
-        font-size: 13px;
-        color: #9bf6ff;
-        opacity: is-yielding ? 0.8 * (1 - z-lift-b) : 0;
-    }
-
-    // ===== Bottom status bar =====
-    Rectangle {
-        y: 428px;
-        width: 320px;
+        y: 28px;
+        width: 240px;
         height: 1px;
         background: #26313a;
     }
     Text {
-        x: 8px;
-        y: 440px;
-        width: 56px;
-        height: 16px;
-        text: round-text;
-        color: #06d6a0;
+        x: 10px;
+        y: 4px;
+        width: 150px;
+        height: 13px;
+        text: "AGENT LOOP";
+        font-size: 11px;
+        color: #e8f1f2;
     }
     Text {
-        x: 68px;
-        y: 440px;
-        width: 176px;
+        x: 10px;
+        y: 17px;
+        width: 150px;
+        height: 10px;
+        text: "vivo bluekernel/ESP32-C6";
+        font-size: 8px;
+        color: #8aa0ab;
+    }
+    // Live state dot: breathing while busy, steady when done/error/idle.
+    Rectangle {
+        x: 222px;
+        y: 10px;
+        width: 8px;
+        height: 8px;
+        border-radius: 4px;
+        background: dialog-accent;
+        opacity: dialog-busy ? 0.35 + 0.65 * pulse : 1;
+    }
+    Text {
+        x: 140px;
+        y: 10px;
+        width: 72px;
+        height: 10px;
+        text: turn-text;
+        font-size: 8px;
+        color: #8aa0ab;
+        horizontal-alignment: right;
+    }
+
+    // ===== Face (y 29-199): two glowing oval eyes on black =====
+
+    // Idle "Zzz" top-right above the head: three letters floating up on
+    // independent sawtooth clocks, fading as they rise. The y bindings
+    // are gated on `is-idle`: a geometry change marks the item's bbox
+    // dirty even while fully transparent, so ungated letters would
+    // dirty three small rects every frame in every state.
+    Text {
+        x: 196px;
+        y: is-idle ? 74px - 40px * z-lift-a : 74px;
+        width: 20px;
+        height: 20px;
+        text: "Z";
+        font-size: 16px;
+        color: #9bf6ff;
+        opacity: is-idle ? 1 - z-lift-a : 0;
+    }
+    Text {
+        x: 212px;
+        y: is-idle ? 60px - 32px * z-lift-b : 60px;
+        width: 16px;
         height: 16px;
+        text: "z";
+        font-size: 12px;
+        color: #9bf6ff;
+        opacity: is-idle ? 0.8 * (1 - z-lift-b) : 0;
+    }
+    Text {
+        x: 226px;
+        y: is-idle ? 52px - 24px * z-lift-c : 52px;
+        width: 12px;
+        height: 12px;
+        text: "z";
+        font-size: 9px;
+        color: #9bf6ff;
+        opacity: is-idle ? 0.6 * (1 - z-lift-c) : 0;
+    }
+
+    // Thinking exclamation mark, top-right above the head (moved from
+    // center to leave room for the tool hammer): yellow bar + dot.
+    // RENDER BUDGET: both parts are geometrically static; only the
+    // opacity breathes on the shared `pulse` clock (an animated height
+    // dirtied a growing bbox and helped starve the ws accept loop).
+    Rectangle {
+        x: 180px;
+        y: 44px;
+        width: 6px;
+        height: 14px;
+        border-radius: 3px;
+        background: #f4d35e;
+        opacity: is-thinking ? 0.45 + 0.55 * pulse : 0;
+    }
+    Rectangle {
+        x: 180px;
+        y: 64px;
+        width: 6px;
+        height: 6px;
+        border-radius: 3px;
+        background: #f4d35e;
+        opacity: is-thinking ? 0.45 + 0.55 * pulse : 0;
+    }
+
+    // ToolRunning hammer (🔨 style: T-shaped head + angled handle),
+    // circled to mark the tool-calling state. Center at (180, 70),
+    // top-right next to the face. RENDER BUDGET: the whole icon is
+    // geometrically static (no `- 6px * pulse` anywhere); only the
+    // circle's opacity breathes, so the 44x44 surface never rides an
+    // animation clock (an earlier version bounced it, and the
+    // repainted bbox starved the websocket accept loop).
+
+    // Circle outline (tool badge). Static geometry AND static opacity:
+    // a 44x44 surface must not ride an animation clock at all.
+    Rectangle {
+        x: 180px - 22px;
+        y: 70px - 22px;
+        width: 44px;
+        height: 44px;
+        border-radius: 22px;
+        background: transparent;
+        border-color: dialog-accent;
+        border-width: 2px;
+        opacity: is-tool ? 0.6 : 0;
+    }
+    // Hammer head: top crossbar (horizontal T-bar).
+    Rectangle {
+        x: 180px - 16px;
+        y: 70px - 10px;
+        width: 16px;
+        height: 5px;
+        border-radius: 1px;
+        background: dialog-accent;
+        opacity: is-tool ? 1 : 0;
+    }
+    // Hammer head: vertical neck connecting to handle.
+    Rectangle {
+        x: 180px - 10px;
+        y: 70px - 5px;
+        width: 4px;
+        height: 8px;
+        border-radius: 1px;
+        background: dialog-accent;
+        opacity: is-tool ? 1 : 0;
+    }
+    // Hammer handle: angled grip extending bottom-right.
+    Rectangle {
+        x: 180px - 8px;
+        y: 70px + 3px;
+        width: 18px;
+        height: 4px;
+        border-radius: 2px;
+        background: dialog-accent;
+        opacity: is-tool ? 0.85 : 0;
+    }
+
+
+    // ===== Task dialog card (y 200-292) =====
+    // Rounded card with a left accent bar, state badge + animated activity
+    // dots, round progress bar, and three info rows.
+    Rectangle {
+        x: 10px;
+        y: 200px;
+        width: 220px;
+        height: 92px;
+        border-radius: 8px;
+        background: #141b21;
+    }
+    Rectangle {
+        x: 10px;
+        y: 208px;
+        width: 4px;
+        height: 76px;
+        border-radius: 2px;
+        background: dialog-accent;
+    }
+    // Card top divider separating badge from info rows.
+    Rectangle {
+        x: 22px;
+        y: 220px;
+        width: 196px;
+        height: 1px;
+        background: #26313a;
+    }
+
+    // State badge: pulsing accent chip + label.
+    Rectangle {
+        x: 22px;
+        y: 205px;
+        width: 6px;
+        height: 6px;
+        border-radius: 3px;
+        background: dialog-accent;
+        opacity: dialog-busy ? 0.35 + 0.65 * pulse : 1;
+    }
+    Text {
+        x: 32px;
+        y: 202px;
+        width: 130px;
+        height: 12px;
+        text: dialog-title;
+        font-size: 9px;
+        color: dialog-accent;
+    }
+    // Activity dots (busy states): three dots, the first breathing.
+    Rectangle {
+        x: 203px;
+        y: 206px;
+        width: 5px;
+        height: 5px;
+        border-radius: 2.5px;
+        background: dialog-accent;
+        opacity: dialog-busy ? 0.3 + 0.7 * pulse : 0;
+    }
+    Rectangle {
+        x: 211px;
+        y: 206px;
+        width: 5px;
+        height: 5px;
+        border-radius: 2.5px;
+        background: dialog-accent;
+        opacity: dialog-busy ? 0.55 : 0;
+    }
+    Rectangle {
+        x: 219px;
+        y: 206px;
+        width: 5px;
+        height: 5px;
+        border-radius: 2.5px;
+        background: dialog-accent;
+        opacity: dialog-busy ? 0.3 : 0;
+    }
+
+    // Round progress bar: track + fill.
+    Rectangle {
+        x: 22px;
+        y: 228px;
+        width: 196px;
+        height: 3px;
+        border-radius: 2px;
+        background: #26313a;
+    }
+    Rectangle {
+        x: 22px;
+        y: 228px;
+        width: 196px * round-frac;
+        height: 3px;
+        border-radius: 2px;
+        background: dialog-accent;
+        opacity: round-frac > 0 ? 1 : 0;
+    }
+
+    // Info rows: label (fixed width, dim) + value (rest of the row, elided).
+    Text {
+        x: 22px;
+        y: 240px;
+        width: 48px;
+        height: 12px;
+        text: "STATUS";
+        font-size: 8px;
+        color: #8aa0ab;
+    }
+    Text {
+        x: 74px;
+        y: 240px;
+        width: 144px;
+        height: 12px;
         text: status;
+        font-size: 9px;
         color: #e8f1f2;
         overflow: elide;
     }
     Text {
-        x: 248px;
-        y: 440px;
-        width: 64px;
-        height: 16px;
+        x: 22px;
+        y: 258px;
+        width: 48px;
+        height: 12px;
+        text: "ROUND";
+        font-size: 8px;
+        color: #8aa0ab;
+    }
+    Text {
+        x: 74px;
+        y: 258px;
+        width: 144px;
+        height: 12px;
+        text: round-text;
+        font-size: 9px;
+        color: #e8f1f2;
+    }
+    Text {
+        x: 22px;
+        y: 276px;
+        width: 48px;
+        height: 12px;
+        text: "TIME";
+        font-size: 8px;
+        color: #8aa0ab;
+    }
+    Text {
+        x: 74px;
+        y: 276px;
+        width: 144px;
+        height: 12px;
         text: turn-text;
+        font-size: 9px;
+        color: #e8f1f2;
+    }
+
+    // ===== Bottom status bar =====
+    Rectangle {
+        y: 296px;
+        width: 240px;
+        height: 1px;
+        background: #26313a;
+    }
+    Text {
+        x: 6px;
+        y: 302px;
+        width: 40px;
+        height: 14px;
+        text: round-text;
+        font-size: 8px;
+        color: #06d6a0;
+    }
+    Text {
+        x: 50px;
+        y: 302px;
+        width: 130px;
+        height: 14px;
+        text: status;
+        font-size: 8px;
+        color: #e8f1f2;
+        overflow: elide;
+    }
+    Text {
+        x: 182px;
+        y: 302px;
+        width: 52px;
+        height: 14px;
+        text: turn-text;
+        font-size: 8px;
         color: #8aa0ab;
         horizontal-alignment: right;
     }

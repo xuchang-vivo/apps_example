@@ -39,7 +39,7 @@ use crate::ui::app_window::MainWindow;
 /// 8 KB: 64 KB exhausted the shared kernel heap together with the Slint
 /// allocations (MainWindow::new() died silently); 8 KB leaves room for them
 /// and still covers the UI call depth (spec §11).
-const UI_THREAD_STACK_SIZE: usize = 8 * 1024;
+const UI_THREAD_STACK_SIZE: usize = 16 * 1024;
 
 /// How long a Done/Error face is shown before the UI reverts to Idle
 /// (UI-side timer; the agent-side state is untouched, spec §3).
@@ -154,6 +154,7 @@ struct UiRefresher {
     display_status: String,
     display_turn_text: String,
     display_blink: f32,
+    display_round_frac: f32,
 }
 
 impl UiRefresher {
@@ -168,6 +169,7 @@ impl UiRefresher {
             display_status: String::new(),
             display_turn_text: String::new(),
             display_blink: 0.0,
+            display_round_frac: f32::NAN,
         }
     }
 
@@ -212,6 +214,11 @@ impl UiRefresher {
         if snapshot.round != self.display_round {
             self.display_round = snapshot.round;
             ui.set_round_text(format!("R{}/{}", snapshot.round, MAX_TOOL_ROUNDS).into());
+            let frac = snapshot.round as f32 / MAX_TOOL_ROUNDS as f32;
+            if frac != self.display_round_frac {
+                self.display_round_frac = frac;
+                ui.set_round_frac(frac);
+            }
         }
 
         if snapshot.status != self.display_status {
@@ -221,11 +228,13 @@ impl UiRefresher {
 
         // UI-side turn clock (spec §3): the agent is blocked inside
         // chat_completion while a turn runs, so it cannot tick this.
+        // Seconds with one decimal: the dialog TIME row reads "t 12.4s".
         let turn_text = match self.turn_started_at {
             Some(start) if display_state != AgentState::Idle => {
-                format!("t{}ms", now_ms.saturating_sub(start))
+                let secs = (now_ms.saturating_sub(start)) as f32 / 1000.0;
+                format!("t{:.1}s", secs)
             }
-            _ => String::from("t0ms"),
+            _ => String::from("t0.0s"),
         };
         if turn_text != self.display_turn_text {
             self.display_turn_text = turn_text;

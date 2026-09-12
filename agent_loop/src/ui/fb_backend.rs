@@ -22,9 +22,12 @@ use librs::syscall::Syscall;
 use slint::platform::software_renderer::{LineBufferProvider, Rgb565Pixel};
 use std::io::{Error, ErrorKind, Result as IoResult};
 
-/// Native ST7796 panel resolution.
-pub(super) const LCD_H_RES: u16 = 320;
-pub(super) const LCD_V_RES: u16 = 480;
+/// UI size: 240x320 portrait, matching the panel's visible area. The kernel
+/// registers /dev/fb0 at the full ST7796 GRAM (320x480); every line is
+/// written at its row start, so the 240-px lines land in the GRAM columns
+/// the panel actually displays (top-left window, Deg0, no mirroring).
+pub(super) const LCD_H_RES: u16 = 240;
+pub(super) const LCD_V_RES: u16 = 320;
 
 /// ~12 fps. Full-screen repaint is bounded by the /dev/fb0 write rate on
 /// the SPI bus shared with the MAX7219 and the flash, not by CPU (spec §6).

@@ -19,9 +19,32 @@ import("//build/toolchain/blueos.gni")
 
 _agent_face_generated = "${target_gen_dir}/agent_face_window.rs"
 
+if (chip == "esp32c3") {
+  _wifi_chip_lib_dir = "//external/vendor/esp-wifi-sys-esp32c3-0.2.0/libs"
+  _rom_chip_lib_dir = "//external/vendor/esp-rom-sys-0.1.4/ld/esp32c3"
+  _wifi_bt_lib = "-lbtdm_app"
+} else if (chip == "esp32c6") {
+  _wifi_chip_lib_dir = "//external/vendor/esp-wifi-sys-esp32c6-0.2.0/libs"
+  _rom_chip_lib_dir = "//external/vendor/esp-rom-sys-0.1.4/ld/esp32c6"
+  _wifi_bt_lib = "-lble_app"
+} else {
+  assert(false, "agent_loop only supports ESP32-C3 and ESP32-C6")
+}
+
 action("generate_agent_face") {
   script = "//build/scripts/run_slint_cli.py"
-  inputs = [ "agent_face.slint" ]
+  inputs = [
+    "agent_face.slint",
+    "face_connecting.png",
+    "face_done.png",
+    "face_error.png",
+    "face_idle.png",
+    "face_reasoning.png",
+    "face_streaming.png",
+    "face_thinking.png",
+    "face_tool.png",
+    "face_yielding.png",
+  ]
   outputs = [ _agent_face_generated ]
   args = [
     "--embed-resources",
@@ -68,15 +91,15 @@ reload_autoconf_and_build("agent_loop") {
     "-L" + rebase_path("${root_build_dir}/obj/external/vendor/esp-phy-0.2.0"),
     "-L" +
         rebase_path("${root_build_dir}/obj/external/vendor/esp-radio-0.18.0"),
-    "-L" + rebase_path("//external/vendor/esp-wifi-sys-esp32c3-0.2.0/libs"),
-    "-L" + rebase_path("//external/vendor/esp-rom-sys-0.1.4/ld/esp32c3"),
+    "-L" + rebase_path(_wifi_chip_lib_dir),
+    "-L" + rebase_path(_rom_chip_lib_dir),
     "-L" + rebase_path("//external/vendor/esp-radio-0.18.0"),
     "-L" + rebase_path("//external/vendor/esp-phy-0.2.0"),
     "-L" + rebase_path("//external/vendor/embedded-tls-0.16.3"),
     "-lesp-phy",
     "-lesp_rom_sys",
     "-lbtbb",
-    "-lbtdm_app",
+    _wifi_bt_lib,
     "-lcoexist",
     "-lespnow",
     "-lmesh",

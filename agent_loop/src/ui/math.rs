@@ -33,6 +33,11 @@ pub extern "C" fn round(x: f64) -> f64 {
 }
 
 #[no_mangle]
+pub extern "C" fn floor(x: f64) -> f64 {
+    libm::floor(x)
+}
+
+#[no_mangle]
 pub extern "C" fn sqrtf(x: f32) -> f32 {
     libm::sqrtf(x)
 }

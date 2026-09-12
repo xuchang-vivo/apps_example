@@ -23,7 +23,7 @@ use crate::caps::led::LedCaps;
 use crate::caps::led::LedProgramArgs;
 use crate::caps::led_matrix::{LedMatrixCaps, LedMatrixDrawArgs};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 const CAPABILITIES_JSON_LEN: usize = include_bytes!("../../capabilities.json").len();
 

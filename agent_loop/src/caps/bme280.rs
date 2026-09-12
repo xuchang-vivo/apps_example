@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::fs::File;
 use std::io::Read as _;
 

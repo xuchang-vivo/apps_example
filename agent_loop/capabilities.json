@@ -32,9 +32,10 @@
                         "type": "string",
                         "enum": [
                             "steps",
-                            "morse"
+                            "morse",
+                            "hold"
                         ],
-                        "description": "Program mode. Use steps for arbitrary timelines, morse for text blinking."
+                        "description": "Program mode. Use steps for arbitrary timelines, morse for text blinking, hold to set a steady state that persists until the next led_program call (no duration limit)."
                     },
                     "repeat": {
                         "type": "integer",
@@ -60,9 +61,12 @@
                                     "type": "string",
                                     "enum": [
                                         "red",
-                                        "blue"
+                                        "blue",
+                                        "purple",
+                                        "magenta",
+                                        "both"
                                     ],
-                                    "description": "LED channel when state=on. Only red and blue are supported. Defaults to red."
+                                    "description": "LED channel for this step. When state=on: specifies which channel(s) to light. When state=off: specifies which channel(s) to turn off; omit to turn off all channels. Supports red, blue, or purple/magenta/both for simultaneous channels."
                                 },
                                 "hold_ms": {
                                     "type": "integer",
@@ -84,6 +88,25 @@
                         "type": "integer",
                         "minimum": 1,
                         "description": "Dot unit duration in milliseconds. Default 200"
+                    },
+                    "state": {
+                        "type": "string",
+                        "enum": [
+                            "on",
+                            "off"
+                        ],
+                        "description": "Required when kind=hold. LED state to set and maintain."
+                    },
+                    "color": {
+                        "type": "string",
+                        "enum": [
+                            "red",
+                            "blue",
+                            "purple",
+                            "magenta",
+                            "both"
+                        ],
+                        "description": "Optional when kind=hold. LED color: red, blue, or purple/magenta/both for simultaneous channels. Defaults to red."
                     }
                 },
                 "required": [

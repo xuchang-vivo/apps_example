@@ -72,14 +72,15 @@ export component MainWindow inherits Window {
     width: 240px;
     height: 320px;
     background: #000000;
-    default-font-size: 9px;
+    default-font-size: 13px;
 
     // Agent-side inputs.
     in property <int> state;         // 0-8, see ui::AgentState
     in property <string> status;     // e.g. "thinking", "tool: led_matrix_draw"
-    in property <string> round-text; // e.g. "R2/4"
+    in property <string> round-text;  // e.g. "R2/4"
     in property <string> turn-text;  // e.g. "t1200ms"
     in property <float> round-frac;  // round / MAX_TOOL_ROUNDS, 0.0..1.0
+    in property <string> model-text; // e.g. "deepseek-chat"
     // Per-frame animation drivers from the UI thread.
     in property <float> spin-x;
     in property <float> spin-y;
@@ -142,7 +143,7 @@ export component MainWindow inherits Window {
     // Idle face
     Image {
         x: 80px;
-        y: 60px;
+        y: 72px;
         width: 80px;
         height: 80px;
         source: @image-url("face_idle.png");
@@ -151,7 +152,7 @@ export component MainWindow inherits Window {
     // Connecting face
     Image {
         x: 80px;
-        y: 60px;
+        y: 72px;
         width: 80px;
         height: 80px;
         source: @image-url("face_connecting.png");
@@ -160,7 +161,7 @@ export component MainWindow inherits Window {
     // Thinking face
     Image {
         x: 80px;
-        y: 60px;
+        y: 72px;
         width: 80px;
         height: 80px;
         source: @image-url("face_thinking.png");
@@ -169,7 +170,7 @@ export component MainWindow inherits Window {
     // Streaming face
     Image {
         x: 80px;
-        y: 60px;
+        y: 72px;
         width: 80px;
         height: 80px;
         source: @image-url("face_streaming.png");
@@ -178,7 +179,7 @@ export component MainWindow inherits Window {
     // Reasoning face
     Image {
         x: 80px;
-        y: 60px;
+        y: 72px;
         width: 80px;
         height: 80px;
         source: @image-url("face_reasoning.png");
@@ -187,7 +188,7 @@ export component MainWindow inherits Window {
     // Tool running face
     Image {
         x: 80px;
-        y: 60px;
+        y: 72px;
         width: 80px;
         height: 80px;
         source: @image-url("face_tool.png");
@@ -196,7 +197,7 @@ export component MainWindow inherits Window {
     // Yielding/Suspended face
     Image {
         x: 80px;
-        y: 60px;
+        y: 72px;
         width: 80px;
         height: 80px;
         source: @image-url("face_yielding.png");
@@ -205,7 +206,7 @@ export component MainWindow inherits Window {
     // Done face
     Image {
         x: 80px;
-        y: 60px;
+        y: 72px;
         width: 80px;
         height: 80px;
         source: @image-url("face_done.png");
@@ -214,7 +215,7 @@ export component MainWindow inherits Window {
     // Error face
     Image {
         x: 80px;
-        y: 60px;
+        y: 72px;
         width: 80px;
         height: 80px;
         source: @image-url("face_error.png");
@@ -245,56 +246,29 @@ export component MainWindow inherits Window {
         is-connecting || is-thinking || is-streaming || is-reasoning
         || is-tool || is-yielding;
 
-    // ===== Header band (y 0-28) =====
+    // ===== Header band (y 0-44): single centered title line =====
     Rectangle {
         y: 0;
         width: 240px;
-        height: 28px;
+        height: 44px;
         background: #10161b;
     }
     Rectangle {
-        y: 28px;
+        y: 44px;
         width: 240px;
         height: 1px;
         background: #26313a;
     }
+    // Centered title — x chosen so 220px text block is centered in 240px
     Text {
         x: 10px;
-        y: 4px;
-        width: 150px;
-        height: 13px;
-        text: "AGENT LOOP";
-        font-size: 11px;
-        color: #e8f1f2;
-    }
-    Text {
-        x: 10px;
-        y: 17px;
-        width: 150px;
-        height: 10px;
-        text: "vivo bluekernel/ESP32-C6";
-        font-size: 8px;
-        color: #8aa0ab;
-    }
-    // Live state dot: breathing while busy, steady when done/error/idle.
-    Rectangle {
-        x: 222px;
-        y: 10px;
-        width: 8px;
-        height: 8px;
-        border-radius: 4px;
-        background: dialog-accent;
-        opacity: dialog-busy ? 0.35 + 0.65 * pulse : 1;
-    }
-    Text {
-        x: 140px;
-        y: 10px;
-        width: 72px;
-        height: 10px;
-        text: turn-text;
-        font-size: 8px;
-        color: #8aa0ab;
-        horizontal-alignment: right;
+        y: 14px;
+        width: 220px;
+        height: 18px;
+        text: "BlueKernel \u{7aef}\u{4fa7}\u{667a}\u{80fd}\u{4f53}";
+        font-size: 16px;
+        color: #ffffff;
+        horizontal-alignment: center;
     }
 
     // ===== Face (y 29-199): two glowing oval eyes on black =====
@@ -306,7 +280,7 @@ export component MainWindow inherits Window {
     // dirty three small rects every frame in every state.
     Text {
         x: 196px;
-        y: is-idle ? 74px - 40px * z-lift-a : 74px;
+        y: is-idle ? 86px - 40px * z-lift-a : 86px;
         width: 20px;
         height: 20px;
         text: "Z";
@@ -316,17 +290,17 @@ export component MainWindow inherits Window {
     }
     Text {
         x: 212px;
-        y: is-idle ? 60px - 32px * z-lift-b : 60px;
+        y: is-idle ? 72px - 32px * z-lift-b : 72px;
         width: 16px;
         height: 16px;
         text: "z";
-        font-size: 12px;
+        font-size: 14px;
         color: #9bf6ff;
         opacity: is-idle ? 0.8 * (1 - z-lift-b) : 0;
     }
     Text {
         x: 226px;
-        y: is-idle ? 52px - 24px * z-lift-c : 52px;
+        y: is-idle ? 64px - 24px * z-lift-c : 64px;
         width: 12px;
         height: 12px;
         text: "z";
@@ -342,7 +316,7 @@ export component MainWindow inherits Window {
     // dirtied a growing bbox and helped starve the ws accept loop).
     Rectangle {
         x: 180px;
-        y: 44px;
+        y: 56px;
         width: 6px;
         height: 14px;
         border-radius: 3px;
@@ -351,7 +325,7 @@ export component MainWindow inherits Window {
     }
     Rectangle {
         x: 180px;
-        y: 64px;
+        y: 76px;
         width: 6px;
         height: 6px;
         border-radius: 3px;
@@ -371,7 +345,7 @@ export component MainWindow inherits Window {
     // a 44x44 surface must not ride an animation clock at all.
     Rectangle {
         x: 180px - 22px;
-        y: 70px - 22px;
+        y: 82px - 22px;
         width: 44px;
         height: 44px;
         border-radius: 22px;
@@ -383,7 +357,7 @@ export component MainWindow inherits Window {
     // Hammer head: top crossbar (horizontal T-bar).
     Rectangle {
         x: 180px - 16px;
-        y: 70px - 10px;
+        y: 82px - 10px;
         width: 16px;
         height: 5px;
         border-radius: 1px;
@@ -393,7 +367,7 @@ export component MainWindow inherits Window {
     // Hammer head: vertical neck connecting to handle.
     Rectangle {
         x: 180px - 10px;
-        y: 70px - 5px;
+        y: 82px - 5px;
         width: 4px;
         height: 8px;
         border-radius: 1px;
@@ -403,7 +377,7 @@ export component MainWindow inherits Window {
     // Hammer handle: angled grip extending bottom-right.
     Rectangle {
         x: 180px - 8px;
-        y: 70px + 3px;
+        y: 82px + 3px;
         width: 18px;
         height: 4px;
         border-radius: 2px;
@@ -412,29 +386,29 @@ export component MainWindow inherits Window {
     }
 
 
-    // ===== Task dialog card (y 200-292) =====
+    // ===== Task dialog card (y 196-320): taller card with 4 info rows =====
     // Rounded card with a left accent bar, state badge + animated activity
-    // dots, round progress bar, and three info rows.
+    // dots, round progress bar, and four info rows.
     Rectangle {
         x: 10px;
-        y: 200px;
+        y: 196px;
         width: 220px;
-        height: 92px;
+        height: 124px;
         border-radius: 8px;
         background: #141b21;
     }
     Rectangle {
         x: 10px;
-        y: 208px;
+        y: 204px;
         width: 4px;
-        height: 76px;
+        height: 112px;
         border-radius: 2px;
         background: dialog-accent;
     }
     // Card top divider separating badge from info rows.
     Rectangle {
         x: 22px;
-        y: 220px;
+        y: 219px;
         width: 196px;
         height: 1px;
         background: #26313a;
@@ -444,19 +418,19 @@ export component MainWindow inherits Window {
     Rectangle {
         x: 22px;
         y: 205px;
-        width: 6px;
-        height: 6px;
-        border-radius: 3px;
+        width: 7px;
+        height: 7px;
+        border-radius: 3.5px;
         background: dialog-accent;
         opacity: dialog-busy ? 0.35 + 0.65 * pulse : 1;
     }
     Text {
-        x: 32px;
+        x: 33px;
         y: 202px;
-        width: 130px;
-        height: 12px;
+        width: 140px;
+        height: 16px;
         text: dialog-title;
-        font-size: 9px;
+        font-size: 13px;
         color: dialog-accent;
     }
     // Activity dots (busy states): three dots, the first breathing.
@@ -491,113 +465,99 @@ export component MainWindow inherits Window {
     // Round progress bar: track + fill.
     Rectangle {
         x: 22px;
-        y: 228px;
+        y: 226px;
         width: 196px;
-        height: 3px;
+        height: 4px;
         border-radius: 2px;
         background: #26313a;
     }
     Rectangle {
         x: 22px;
-        y: 228px;
+        y: 226px;
         width: 196px * round-frac;
-        height: 3px;
+        height: 4px;
         border-radius: 2px;
         background: dialog-accent;
         opacity: round-frac > 0 ? 1 : 0;
     }
 
-    // Info rows: label (fixed width, dim) + value (rest of the row, elided).
+    // Info rows: label (fixed width, dim) + value (rest of row, elided).
+    // Row 1: 任务状态
     Text {
         x: 22px;
-        y: 240px;
-        width: 48px;
-        height: 12px;
-        text: "STATUS";
-        font-size: 8px;
-        color: #8aa0ab;
+        y: 237px;
+        width: 68px;
+        height: 16px;
+        text: "\u{4efb}\u{52a1}\u{72b6}\u{6001}";
+        font-size: 13px;
+        color: #c8dde5;
     }
     Text {
-        x: 74px;
-        y: 240px;
-        width: 144px;
-        height: 12px;
+        x: 106px;
+        y: 237px;
+        width: 120px;
+        height: 16px;
         text: status;
-        font-size: 9px;
-        color: #e8f1f2;
+        font-size: 14px;
+        color: #ffffff;
         overflow: elide;
     }
+    // Row 2: 长任务调用
     Text {
         x: 22px;
-        y: 258px;
-        width: 48px;
-        height: 12px;
-        text: "ROUND";
-        font-size: 8px;
-        color: #8aa0ab;
+        y: 256px;
+        width: 80px;
+        height: 16px;
+        text: "\u{957f}\u{4efb}\u{52a1}\u{8c03}\u{7528}";
+        font-size: 13px;
+        color: #c8dde5;
     }
     Text {
-        x: 74px;
-        y: 258px;
-        width: 144px;
-        height: 12px;
+        x: 106px;
+        y: 256px;
+        width: 120px;
+        height: 16px;
         text: round-text;
-        font-size: 9px;
-        color: #e8f1f2;
+        font-size: 14px;
+        color: #ffffff;
     }
+    // Row 3: 耗时
     Text {
         x: 22px;
-        y: 276px;
-        width: 48px;
-        height: 12px;
-        text: "TIME";
-        font-size: 8px;
-        color: #8aa0ab;
+        y: 275px;
+        width: 68px;
+        height: 16px;
+        text: "\u{8017}\u{65f6}";
+        font-size: 13px;
+        color: #c8dde5;
     }
     Text {
-        x: 74px;
-        y: 276px;
-        width: 144px;
-        height: 12px;
+        x: 106px;
+        y: 275px;
+        width: 120px;
+        height: 16px;
         text: turn-text;
-        font-size: 9px;
-        color: #e8f1f2;
+        font-size: 14px;
+        color: #ffffff;
+    }
+    // Row 4: 模型
+    Text {
+        x: 22px;
+        y: 294px;
+        width: 68px;
+        height: 16px;
+        text: "\u{6a21}\u{578b}";
+        font-size: 13px;
+        color: #c8dde5;
+    }
+    Text {
+        x: 106px;
+        y: 294px;
+        width: 120px;
+        height: 16px;
+        text: model-text;
+        font-size: 14px;
+        color: dialog-accent;
     }
 
-    // ===== Bottom status bar =====
-    Rectangle {
-        y: 296px;
-        width: 240px;
-        height: 1px;
-        background: #26313a;
-    }
-    Text {
-        x: 6px;
-        y: 302px;
-        width: 40px;
-        height: 14px;
-        text: round-text;
-        font-size: 8px;
-        color: #06d6a0;
-    }
-    Text {
-        x: 50px;
-        y: 302px;
-        width: 130px;
-        height: 14px;
-        text: status;
-        font-size: 8px;
-        color: #e8f1f2;
-        overflow: elide;
-    }
-    Text {
-        x: 182px;
-        y: 302px;
-        width: 52px;
-        height: 14px;
-        text: turn-text;
-        font-size: 8px;
-        color: #8aa0ab;
-        horizontal-alignment: right;
-    }
 }

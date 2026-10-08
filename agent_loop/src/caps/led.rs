@@ -62,6 +62,11 @@ pub enum LedProgramArgs {
         #[serde(default)]
         repeat: Option<u32>,
     },
+    Hold {
+        state: String,
+        #[serde(default)]
+        color: Option<String>,
+    },
 }
 
 /// Handle over the two physical LED channels.
@@ -164,6 +169,7 @@ impl LedCaps {
                 unit_ms.unwrap_or(DEFAULT_MORSE_UNIT_MS),
                 repeat.unwrap_or(1),
             ),
+            LedProgramArgs::Hold { state, color } => self.run_hold(state, color),
         };
         if result.get("ok") != Some(&Value::Bool(true)) {
             let _ = self.apply(false, None);
@@ -256,6 +262,30 @@ impl LedCaps {
             "step_count": steps.len(),
             "hardware": self.channels.is_hardware(),
             "final_state": if self.is_on {"on"} else {"off"},
+            "final_color": self.color
+        })
+    }
+
+    fn run_hold(&mut self, state: String, color: Option<String>) -> Value {
+        let on = match parse_led_state(&state) {
+            Ok(v) => v,
+            Err(e) => return error_result("invalid_args", e),
+        };
+        if let Err(e) = self.apply(on, color.as_deref()) {
+            return error_result("unsupported_color", e);
+        }
+        println!(
+            "led> hold state={} color={} hardware={}",
+            state,
+            color.as_deref().unwrap_or("(inherit)"),
+            self.channels.is_hardware(),
+        );
+        json!({
+            "ok": true,
+            "action": "led_program",
+            "mode": "hold",
+            "hardware": self.channels.is_hardware(),
+            "final_state": if self.is_on { "on" } else { "off" },
             "final_color": self.color
         })
     }
@@ -354,18 +384,31 @@ impl LedCaps {
     }
 
     /// Validate `color` and drive the LED channels accordingly, then update the
-    /// cached state. Returns an error message when the color cannot be rendered
-    /// by the two-LED (red + blue) hardware.
+    /// cached state. When `on=false` and `color` is specified, only the named
+    /// channel is turned off; when `color` is None, all channels are turned off.
     fn apply(&mut self, on: bool, color: Option<&str>) -> Result<(), String> {
         if on {
             let (red, blue) = color_channels(color)?;
             self.channels.write_red(red)?;
             self.channels.write_blue(blue)?;
+            self.is_on = true;
+            self.color = color.map(|c| c.to_ascii_lowercase());
         } else {
-            self.channels.off()?;
+            // If color is specified, turn off only that channel; otherwise turn off all
+            if let Some(c) = color {
+                let (red, blue) = color_channels(Some(c))?;
+                if red {
+                    self.channels.write_red(false)?;
+                }
+                if blue {
+                    self.channels.write_blue(false)?;
+                }
+            } else {
+                self.channels.off()?;
+            }
+            self.is_on = false;
+            self.color = None;
         }
-        self.is_on = on;
-        self.color = color.map(|c| c.to_ascii_lowercase());
         Ok(())
     }
 }
@@ -381,14 +424,13 @@ fn parse_led_state(state: &str) -> Result<bool, String> {
 
 /// Map a color name to (red, blue) channel levels.
 ///
-/// Only colors expressible with the red + blue LEDs are accepted; anything else
-/// is rejected so callers learn the hardware limit rather than silently getting
-/// the wrong color.
+/// Both LEDs can be driven simultaneously to produce mixed colors.
 fn color_channels(color: Option<&str>) -> Result<(bool, bool), String> {
     match color.map(|c| c.to_ascii_lowercase()).as_deref() {
         None | Some("red") => Ok((true, false)),
         Some("blue") => Ok((false, true)),
-        Some(other) => Err(format!("unsupported color '{other}'; supported: red, blue")),
+        Some("purple") | Some("magenta") | Some("both") => Ok((true, true)),
+        Some(other) => Err(format!("unsupported color '{other}'; supported: red, blue, purple, magenta, both")),
     }
 }
 

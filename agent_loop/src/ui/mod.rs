@@ -81,6 +81,7 @@ struct UiSnapshot {
     state: AgentState,
     round: u8,
     status: String,
+    model: String,
 }
 
 /// Shared state written by the agent thread (`set`/`set_round`, each a
@@ -96,6 +97,7 @@ pub struct UiState {
     state: AgentState,
     round: u8,
     status: String,
+    model: String,
 }
 
 impl UiState {
@@ -104,6 +106,7 @@ impl UiState {
             state: AgentState::Idle,
             round: 0,
             status: String::new(),
+            model: String::new(),
         }
     }
 
@@ -119,6 +122,11 @@ impl UiState {
         self.status.push_str(&status[..end]);
     }
 
+    pub fn set_model(&mut self, model: &str) {
+        self.model.clear();
+        self.model.push_str(model);
+    }
+
     pub fn set_round(&mut self, round: u8) {
         self.round = round;
     }
@@ -131,6 +139,7 @@ impl UiState {
             state: self.state,
             round: self.round,
             status: self.status.clone(),
+            model: self.model.clone(),
         }
     }
 }
@@ -153,6 +162,7 @@ struct UiRefresher {
     display_round: u8,
     display_status: String,
     display_turn_text: String,
+    display_model: String,
     display_blink: f32,
     display_round_frac: f32,
 }
@@ -168,6 +178,7 @@ impl UiRefresher {
             display_round: u8::MAX,
             display_status: String::new(),
             display_turn_text: String::new(),
+            display_model: String::new(),
             display_blink: 0.0,
             display_round_frac: f32::NAN,
         }
@@ -224,6 +235,11 @@ impl UiRefresher {
         if snapshot.status != self.display_status {
             self.display_status = snapshot.status;
             ui.set_status(self.display_status.clone().into());
+        }
+
+        if snapshot.model != self.display_model {
+            self.display_model = snapshot.model;
+            ui.set_model_text(self.display_model.clone().into());
         }
 
         // UI-side turn clock (spec §3): the agent is blocked inside

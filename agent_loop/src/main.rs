@@ -51,6 +51,7 @@ struct AgentRuntime {
 // BlueOS currently has no DNS resolver. Connect to the pinned IPv4 address,
 // while keeping the hostname for HTTPS SNI and the HTTP Host header.
 const DEEPSEEK_API_BASE: &str = "https://3.173.21.63/v1";
+//const DEEPSEEK_API_BASE: &str = "http://10.171.198.12:18080";
 const DEEPSEEK_API_HOST: &str = "api.deepseek.com";
 
 impl AgentRuntime {
@@ -76,13 +77,19 @@ fn main() -> std::io::Result<()> {
     if let Err(error) = ui::spawn_ui_thread(ui.clone()) {
         eprintln!("ui thread spawn failed: {error}");
     }
+    // Push model name before WiFi so it is visible on the first frame.
+    let model = env::var("OPENAI_MODEL").unwrap_or_else(|_| String::from("deepseek-chat"));
+    if let Ok(mut shared) = ui.lock() {
+        shared.set_model(&model);
+    }
+
     set_ui_state(&ui, ui::AgentState::Connecting, "connecting wifi");
     if let Err(error) = wifi::connect_wifi() {
         eprintln!("WiFi connection failed; agent server not started: {error}");
         set_ui_state(&ui, ui::AgentState::Error, "wifi failed");
         return Ok(());
     }
-    main_loop(ui);
+    main_loop(ui, model);
     Ok(())
 }
 
@@ -93,7 +100,7 @@ fn set_ui_state(ui: &Mutex<ui::UiState>, agent_state: ui::AgentState, status: &s
     }
 }
 
-fn main_loop(ui: Arc<Mutex<ui::UiState>>) {
+fn main_loop(ui: Arc<Mutex<ui::UiState>>, model: String) {
     // let api_key = match env::var("OPENAI_API_KEY") {
     //     Ok(value) if !value.is_empty() => value,
     //     _ => {
@@ -103,8 +110,6 @@ fn main_loop(ui: Arc<Mutex<ui::UiState>>) {
     // };
     let api_key = String::from("sk-cbbfdb1ad3b34b6e96d177baf1fb9510");
     let endpoint = env::var("OPENAI_API_BASE").unwrap_or_else(|_| String::from(DEEPSEEK_API_BASE));
-    let model = env::var("OPENAI_MODEL").unwrap_or_else(|_| String::from("deepseek-chat"));
-
     let registry = match CapabilityRegistry::load() {
         Ok(registry) => registry,
         Err(error) => {
@@ -132,7 +137,7 @@ fn main_loop(ui: Arc<Mutex<ui::UiState>>) {
 
     let runtime = Arc::new(Mutex::new(AgentRuntime {
         client,
-        model,
+        model: model.clone(),
         registry,
         session: AgentSession::new(true, ui.clone()),
     }));
